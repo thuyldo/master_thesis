@@ -1,0 +1,385 @@
+---
+title: "NEJM"
+author: "Do Thuy Linh"
+date: "07/04/2023"
+output: 
+  html_document:
+    code_folding: "hide"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = T)
+```
+
+
+```{r library}
+library(plyr)
+library(dplyr)
+library(survival)
+library(PBIR)
+library(haven)
+library(epitools)
+library(ggplot2)
+library(survminer)
+library(latex2exp)
+library(tidyr)
+```
+
+
+```{r datasets}
+demo <- read_sas("Datasphère/zip/AllProvidedFiles_265/demo.sas7bdat", NULL)
+aeendpt <- read_sas("Datasphère/zip/AllProvidedFiles_265/aeendpt.sas7bdat", NULL)
+asendpt <- read_sas("Datasphère/zip/AllProvidedFiles_265/asendpt.sas7bdat",  NULL)
+medhist <- read_sas("Datasphère/zip/AllProvidedFiles_265/medhist.sas7bdat", NULL)
+respeval <- read_sas("Datasphère/zip/AllProvidedFiles_265/respeval.sas7bdat", NULL)
+radiotx <- read_sas("Datasphère/zip/AllProvidedFiles_265/radiotx.sas7bdat", NULL)
+chemotx <- read_sas("Datasphère/zip/AllProvidedFiles_265/chemotx.sas7bdat", NULL)
+surghist <- read_sas("Datasphère/zip/AllProvidedFiles_265/surghist.sas7bdat", NULL)
+```
+
+# Baseline characteristics
+
+```{r}
+sex <- xtabs(~SEX+TRT,demo)
+sex
+round(proportions(sex,"TRT"),2)
+
+age <- xtabs(~AGECAT+TRT,demo)
+age
+round(proportions(age, "TRT"),2)
+
+ecog <- xtabs(~B_ECOG+TRT,demo)
+ecog
+round(proportions(ecog, "TRT"),2)
+
+race <- xtabs(~RACE+TRT,asendpt)
+race
+round(proportions(race, "TRT"),2)
+
+weightloss <- xtabs(~MHWLP+ATRT,medhist)
+weightloss
+round(proportions(weightloss, "ATRT"),2)
+
+prim <- xtabs(~DIAGTYPE+TRT,demo)
+round(proportions(prim, "TRT"),2)
+
+hist <- xtabs(~HDIFFERM+TRT,demo)
+hist
+round(proportions(hist,"TRT"),2)
+```
+
+```{r create prior}
+prior_radio <- unique(radiotx[c("SUBJID","RAANY")])
+prior_chemo <- unique(chemotx[c("SUBJID","CHANY")])
+prior_surg <- unique(surghist[c("SUBJID","SXANY")])
+rad_chem <- merge(prior_radio,prior_chemo, all=T)
+prior <- merge(rad_chem, prior_surg, all=T)
+prior$prior <- ifelse(prior$RAANY=='Y' | prior$CHANY=='Y' | prior$SXANY=='Y', 'Y','N')
+prior[is.na(prior$prior),"prior"] <- 'N'
+prior_bis <- prior[c("SUBJID","prior")]
+aeendpt <- merge(aeendpt,prior_bis)
+```
+
+```{r}
+prio <- xtabs(~prior+TRT,aeendpt)
+prio
+proportions(prio,"TRT")
+```
+
+
+```{r}
+expe=aeendpt[aeendpt$TRT=="panit. plus chemotherapy",]
+ctrl=aeendpt[aeendpt$TRT=="Chemotherapy",]
+```
+
+
+# Primary endpoint : Overall Survival
+
+```{r}
+surv.obj.os.expe <- Surv(expe$DTHDY/30.4375, expe$DTH)
+surv.obj.os.ctrl <- Surv(ctrl$DTHDY/30.4375, ctrl$DTH)
+fit.obj.os.expe <- survfit(surv.obj.os.expe~1)
+fit.obj.os.ctrl <- survfit(surv.obj.os.ctrl~1)
+summary(fit.obj.os.expe)$table
+summary(fit.obj.os.ctrl)$table
+
+plot(fit.obj.os.expe, col="blue", conf.int=F, xlab="time (months)",ylab="Probability",main="Overall Survival",xlim=c(0,33))
+lines(fit.obj.os.ctrl,col="red", lty="dashed" , conf.int=F)
+legend(x=20,y=0.8, legend=c("E+C","C"),fill=c("blue","red"))
+```
+
+```{r}
+fit.obj.os<- survfit(Surv(DTHDY/30.4375, DTH)~TRT, data=aeendpt)
+ggsurvplot(fit.obj.os,
+           risk.table=T,
+           xlab= "Time (months)" , 
+           ylab= "Probability",
+           title = "Overall Survival",
+           risk.table.height=0.3,
+           legend.title = "Group",
+           legend.labs = c("C", "E+C"),
+           palette = c("red", "blue"),
+           xlim=c(0,30),
+           break.x.by=5,
+           censor.shape="+",
+           pval = TRUE,
+           pval.method=T,
+           pval.coord=c(20,0.75),
+           pval.method.coord=c(20,0.9))
+```
+
+
+```{r}
+res.cox.os <- coxph(Surv(DTHDY,DTH)~TRT,data=aeendpt)
+summary(res.cox.os)
+```
+
+# Secondary endpoints
+
+## PFS
+
+```{r}
+surv.obj.pfs.expe <- Surv(expe$PFSDYLR/30.4375, expe$PFSLR)
+surv.obj.pfs.ctrl <- Surv(ctrl$PFSDYLR/30.4375, ctrl$PFSLR)
+
+fit.obj.pfs.expe <- survfit(surv.obj.pfs.expe~1)
+fit.obj.pfs.ctrl <- survfit(surv.obj.pfs.ctrl~1)
+
+summary(fit.obj.pfs.expe)$table
+summary(fit.obj.pfs.ctrl)$table
+
+plot(fit.obj.pfs.expe, col="blue", conf.int=F, xlab="time (months)",ylab="Probability",main="Progression-Free Survival", xlim=c(0,30))
+lines(fit.obj.pfs.ctrl,col="red", lty = "dashed" ,conf.int=F)
+legend(x=20,y=0.8, legend=c("E+C","C"),fill=c("blue","red"))
+```
+
+```{r}
+fit.obj.pfs<- survfit(Surv(PFSDYLR/30.4375, PFSLR)~TRT, data=aeendpt)
+ggsurvplot(fit.obj.pfs,
+           risk.table=T,
+           xlab= "Time (months)" , 
+           ylab= "Probability",
+           title = "Progression-Free Survival",
+           risk.table.height=0.3,
+           legend.title = "Group",
+           legend.labs = c("C", "E+C"),
+           palette = c("red", "blue"),
+           xlim=c(0,30),
+           break.x.by=5,
+           censor.shape="+",
+           pval = TRUE,
+           pval.method=T,
+           pval.coord=c(20,0.75),
+           pval.method.coord=c(20,0.9))
+```
+
+
+```{r}
+res.cox.pfs <- coxph(Surv(PFSDYLR,PFSLR)~TRT,data=aeendpt)
+summary(res.cox.pfs)
+```
+
+## ORR
+
+```{r}
+ORR <- xtabs(~ROSLRCA+TRT,aeendpt)
+ORR
+proportions(ORR,"TRT")
+```
+
+```{r}
+resp <- c('No responders','Responders')
+group <- c('C','E+C')
+mat_orr <- matrix(c(260-7-51,260-9-71, 7+51,9+71),nrow=2,ncol=2,byrow=T)
+dimnames(mat_orr) <- list('Response'=resp,'Group'=group)
+mat_orr
+oddsratio(mat_orr)
+```
+
+
+## TTR
+
+```{r}
+resp <- aeendpt[aeendpt$ROSLR==1,]
+resp_expe <- resp[resp$TRT=="panit. plus chemotherapy",]
+resp_ctrl <- resp[resp$TRT=="Chemotherapy",]
+```
+
+```{r}
+theme_set(theme_bw())
+# Basic ECDF plot using ggplot package
+ggplot(resp, aes(RDYLR/7, col=TRT)) + stat_ecdf() + labs(y= "Probability", x = "Time to Response (weeks)", title="Time To Response") + scale_colour_manual(values=c("red", "blue"), name = "Group", labels = c("C", "E+C")) + xlim(0,50)
+```
+
+```{r}
+quantile(ecdf(resp_expe$RDYLR/7))
+quantile(ecdf(resp_ctrl$RDYLR/7))
+```
+
+
+
+# Three methods
+
+## DOR
+
+```{r}
+resp <- aeendpt[aeendpt$ROSLR==1,]
+resp_expe <- resp[resp$TRT=="panit. plus chemotherapy",]
+resp_ctrl <- resp[resp$TRT=="Chemotherapy",]
+
+surv.obj.dor.expe2 <- Surv(resp_expe$RDURLR/30.4375, resp_expe$PFSLR) 
+surv.obj.dor.ctrl2 <- Surv(resp_ctrl$RDURLR/30.4375, resp_ctrl$PFSLR)
+
+fit.obj.dor.expe2 <- survfit(surv.obj.dor.expe2~1)
+fit.obj.dor.ctrl2 <- survfit(surv.obj.dor.ctrl2~1)
+
+summary(fit.obj.dor.expe2)$table
+quantile(fit.obj.dor.expe2)
+#summary(fit.obj.dor.ctrl)$table
+#quantile(fit.obj.dor.ctrl)
+
+
+plot(fit.obj.dor.expe2, conf.int=F, col="blue", xlab="time (months)",ylab="Probability", main="A - Duration Of Response")
+lines(fit.obj.dor.ctrl2,col="red", lty="dashed", conf.int=F)
+legend(x=20,y=0.8, legend=c("E+C","C"),fill=c("blue","red"))
+
+```
+
+```{r}
+res.cox.dor <- coxph(Surv(RDURLR,PFSLR)~TRT,data=resp)
+summary(res.cox.dor)
+summary(res.cox.dor)$sctest[3]
+```
+
+```{r}
+fit.obj.dor<- survfit(Surv(RDURLR/30.4375, PFSLR)~TRT, data=aeendpt)
+ggsurvplot(fit.obj.dor,
+           risk.table=T,
+           xlab= "Time (months)" , 
+           ylab= "Probability",
+           title = "Duration Of Response",
+           risk.table.height=0.3,
+           legend.title = "Group",
+           legend.labs = c("C", "E+C"),
+           palette = c("red", "blue"),
+           xlim=c(0,30),
+           break.x.by=5,
+           censor.shape="+")
+```
+
+
+## TIR
+
+```{r}
+aeendpt$TIR <- ifelse(aeendpt$ROSLR==1,aeendpt$RDURLR,1)
+aeendpt$censor <- ifelse(aeendpt$ROSLR==1,aeendpt$PFSLR,1)
+
+expe=aeendpt[aeendpt$TRT=="panit. plus chemotherapy",]
+ctrl=aeendpt[aeendpt$TRT=="Chemotherapy",]
+
+surv.obj.tir.expe <- Surv(expe$TIR/30.4375, expe$censor)
+surv.obj.tir.ctrl <- Surv(ctrl$TIR/30.4375, ctrl$censor)
+
+fit.obj.tir.expe <- survfit(surv.obj.tir.expe~1)
+fit.obj.tir.ctrl <- survfit(surv.obj.tir.ctrl~1)
+
+summary(fit.obj.tir.expe)$table
+summary(fit.obj.tir.ctrl)$table
+
+plot(fit.obj.tir.expe, col="blue", conf.int=F, xlab="time (months)",ylab="Probability",main="B - Time In Response")
+lines(fit.obj.tir.ctrl,col="red", lty="dashed", conf.int=F)
+legend(x=20,y=0.8, legend=c("E+C","C"),fill=c("blue","red"))
+```
+
+```{r}
+aeendpt$TIR <- ifelse(aeendpt$ROSLR==1,aeendpt$RDURLR,1)
+aeendpt$censor <- ifelse(aeendpt$ROSLR==1,aeendpt$PFSLR,1)
+fit.obj.tir<- survfit(Surv(TIR/30.4375, censor)~TRT, data=aeendpt)
+ggsurvplot(fit.obj.tir,
+           risk.table=T,
+           xlab= "Time (months)" , 
+           ylab= "Probability",
+           title = "Time In Response",
+           risk.table.height=0.3,
+           legend.title = "Group",
+           legend.labs = c("C", "E+C"),
+           palette = c("red", "blue"),
+           xlim=c(0,30),
+           break.x.by=5,
+           censor.shape="+")
+```
+
+```{r}
+res.cox.tir <- coxph(Surv(TIR/30.4375,censor)~TRT,data=aeendpt)
+summary(res.cox.tir)
+```
+
+## PBIR
+
+```{r}
+fit1 <- PBIR1(aeendpt$PFSDYLR[demo$TRTCD==2]/30.4375,aeendpt$PFSLR[demo$TRTCD==2],aeendpt$RDYLR[demo$TRTCD==2]/30.4375,aeendpt$ROSLR[demo$TRTCD==2], time=NULL,alpha=0.95)
+
+fit0 <- PBIR1(aeendpt$PFSDYLR[demo$TRTCD==50]/30.4375,aeendpt$PFSLR[demo$TRTCD==50],aeendpt$RDYLR[demo$TRTCD==50]/30.4375,aeendpt$ROSLR[demo$TRTCD==50], time=NULL,alpha=0.95)
+
+tt1=c(0, fit1$time)
+PBIR1=c(0, fit1$PBIR)
+B1=length(tt1)
+tt1=rep(tt1, rep(2, B1))[-1]
+PBIR1=rep(PBIR1, rep(2, B1))[-(2*B1)]
+tt0=c(0, fit0$time)
+PBIR0=c(0, fit0$PBIR)
+B0=length(tt0)
+tt0=rep(tt0, rep(2, B0))[-1]
+PBIR0=rep(PBIR0, rep(2, B0))[-(2*B0)]
+plot(range(c(fit1$time, fit0$time)), range(c(fit1$PBIR, fit0$PBIR)),
+     xlab="time (months)",  ylab="Probability",
+     main="Probability of Being in Response", type="n")
+lines(tt0, PBIR0, col="red", lty="dashed")
+lines(tt1, PBIR1, col="blue")
+legend(x=25,y=0.2, legend=c("E+C","C"),fill=c("blue","red"))
+```
+
+
+```{r}
+aeendpt$newtrt[aeendpt$TRTCD==2] <- 1 #expe
+aeendpt$newtrt[aeendpt$TRTCD==50] <- 0 #ctrl
+
+fit2=PBIR2(t2PROGRESSION=aeendpt$PFSDYLR/30.4375, STATUS_PROGRESSION=aeendpt$PFSLR, t2RESPONSE=aeendpt$RDYLR/30.4375, STATUS_RESPONSE=aeendpt$ROSLR, TRT=aeendpt$newtrt)
+
+tt=fit2$time
+diff=fit2$diff
+low=fit2$ci.low
+up=fit2$ci.up
+B=length(tt)+1
+tt=c(0, tt)
+diff=c(0, diff)
+low=c(0, low)
+up=c(0, up)
+tt=rep(tt, rep(2, B))[-1]
+diff=rep(diff, rep(2, B))[-(2*B)]
+low=rep(low, rep(2, B))[-(2*B)]
+up=rep(up, rep(2, B))[-(2*B)]
+plot(range(c(tt, 0)), range(c(low, up)), xlab="time (months)", ylab="Difference in PBIR", main='Difference in PBIR with 95% Confidence Interval', lwd=2, type="n")
+lines(tt, diff, lwd=2, col=3)
+lines(tt, low, col=2)
+lines(tt, up, col=2)
+lines(range(fit2$time), rep(0, 2), col=4, lty=4)
+```
+
+```{r}
+md1 <- mduration(aeendpt$PFSDYLR[demo$TRTCD==2],aeendpt$PFSLR[demo$TRTCD==2],aeendpt$RDYLR[demo$TRTCD==2],aeendpt$ROSLR[demo$TRTCD==2],time.max=-1)
+md0 <- mduration(aeendpt$PFSDYLR[demo$TRTCD==50],aeendpt$PFSLR[demo$TRTCD==50],aeendpt$RDYLR[demo$TRTCD==50],aeendpt$ROSLR[demo$TRTCD==50],time.max=-1)
+
+diff=(md1$meandor.est-md0$meandor.est)
+se=sqrt(md1$meandor.se^2+md0$meandor.se^2)
+z=diff/se
+ci=diff+c(-1,1)*qnorm(0.975)*se
+pvalue=1-pchisq(z^2, 1)
+time.max1 <- md1$time.truncation
+time.max2 <- md1$time.truncation
+result=cbind(diff, ci[1], ci[2], pvalue, time.max1, time.max2)
+colnames(result)=c("difference in DOR", "CI.low", "CI.high", "p.value","time.max1","time.max2")
+print(round(result, 4))
+```
+
+

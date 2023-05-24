@@ -1,0 +1,284 @@
+---
+title: "Dataset"
+author: "Do Thuy Linh"
+date: "13/04/2023"
+output: 
+  html_document:
+    code_folding: "hide"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = T)
+```
+
+
+```{r library}
+library(plyr)
+library(dplyr)
+library(survival)
+library(PBIR)
+library(haven)
+library(epitools)
+library(gridExtra)
+library(ggplot2)
+library(survminer)
+library(tidyr)
+```
+
+
+```{r datasets}
+aeendpt <- read_sas("Datasphère/zip/AllProvidedFiles_265/aeendpt.sas7bdat", NULL)
+```
+
+# Extract one dataset "data_compress"
+
+```{r, results = 'hide'}
+dataset <- function(n,n_accrual, n_follow, rr, lambda2_diff, lambda1_diff) {
+  
+  ##### CTRL ARM ####
+  
+  ctrl <- aeendpt[aeendpt$TRTCD==2,]
+  id <- 1:n
+  responders <- ctrl[ctrl$ROSLR==1,]
+  nresponders <- ctrl[ctrl$ROSLR==0,]
+  p_c <- nrow(responders)/260
+  resp <- rbinom(n,1,p_c)
+  dt_c <- data.frame(id,resp)
+  dt_c$trt <- 0
+  respn <- nrow(dt_c[dt_c$resp==1,])
+  TTR_NEM <- responders$RDYLR
+  TTR <- sample(x=TTR_NEM,size=respn, replace=T)
+  dt_c$TTR[dt_c$resp==1] <- TTR
+  dt_c$TTR[dt_c$resp==0] <- NA
+  
+  #lambda 2
+  
+  lambda2_fit <- survfit(Surv(RDURLR,RDURLRC)~1,data=ctrl)
+  lambda2_c <- sum(lambda2_fit$n.event)/sum(lambda2_fit$time)
+  DOR <- rexp(respn,rate=lambda2_c)
+  dt_c$DOR[dt_c$resp==1] <- DOR
+  dt_c$DOR[dt_c$resp==0] <- NA
+  
+  #lambda 1
+  
+  lambda1_fit <- survfit(Surv(PFSDYLR,PFSLR)~1,data=nresponders)
+  lambda1_c <- sum(lambda1_fit$n.event)/sum(lambda1_fit$time)
+  PFS <- rexp(n-respn,rate=lambda1_c)
+  dt_c$prog[dt_c$resp==1] <- DOR+TTR
+  dt_c$prog[dt_c$resp==0] <- PFS
+  
+  #accrual
+  
+  dt_c$accrual <- runif(n,0,n_accrual*30.4375)
+  dt_c$Time <- dt_c$prog + dt_c$accrual
+  
+  #censoring
+  
+  dt_c$censoring <- ifelse(dt_c$Time<(n_accrual+n_follow)*30.4375, 1, 0)
+  dt_c$PFS <- ifelse(dt_c$censoring==1, dt_c$prog, ((n_accrual+n_follow)*30.4375)-dt_c$accrual)
+  
+  #### EXPERIMENTAL ARM ####
+  
+  p_e <- p_c+rr 
+  resp <- rbinom(n,1,p_e)
+  dt_e <- data.frame(id, resp)
+  dt_e$trt <- 1
+  
+  respn_e <- nrow(dt_e[dt_e$resp==1,])
+  TTR_e <- sample(x=TTR_NEM,size=respn_e, replace=T)
+  dt_e$TTR[dt_e$resp==1] <- TTR_e
+  dt_e$TTR[dt_e$resp==0] <- NA
+  
+  #lambda 2#
+  
+  lambda2_e <- lambda2_diff*lambda2_c
+  DOR_e <- rexp(respn_e,rate=lambda2_e)
+  dt_e$DOR[dt_e$resp==1] <- DOR_e
+  dt_e$DOR[dt_e$resp==0] <- NA
+  
+  #lamba 1
+  
+  lambda1_e <- lambda1_diff*lambda1_c
+  PFS_e <- rexp(n-respn_e,rate=lambda1_e)
+  dt_e$prog[dt_e$resp==1] <- DOR_e+TTR_e
+  dt_e$prog[dt_e$resp==0] <- PFS_e
+  
+  #accrual
+  
+  dt_e$accrual <- runif(n,0,n_accrual*30.4375)
+  dt_e$Time <- dt_e$prog + dt_e$accrual
+  
+  #censoring
+  
+  dt_e$censoring <- ifelse(dt_e$Time<(n_accrual+n_follow)*30.4375, 1, 0)
+  dt_e$PFS <- ifelse(dt_e$censoring==1, dt_e$prog, ((n_accrual+n_follow)*30.4375)-dt_e$accrual)
+  
+  # MERGE DATASETS ##
+  
+  data <- rbind(dt_c,dt_e)
+  
+  data_compress <<- data
+}
+
+set.seed(123)
+data.frame(t(replicate(n=1, dataset(260,20,7,0.1,0.8,1),simplify=T)))
+```
+
+# TTR
+
+```{r}
+theme_set(theme_bw())
+ggplot(data_compress[data_compress$resp==1,], aes(TTR/7, col=as.factor(trt))) + stat_ecdf() + labs(y= "Probability", x = "Time to Response (weeks)", title="Time To Response") + scale_colour_manual(values=c("red", "blue"), name = "", labels = c("Control arm", "Experimental arm")) + xlim(0,50)
+```
+
+# PBIR
+
+```{r}
+#T2 = time to progression and T1 time to response
+
+mdur <- function(T2,deltaT2,T1,deltaT1,group1,group2) {
+md1 <- mduration(T2[group1],deltaT2[group1],T1[group1],deltaT1[group1],time.max=-1)
+md0 <- mduration(T2[group2],deltaT2[group2],T1[group2],deltaT1[group2],time.max=-1)
+diff=(md1$meandor.est-md0$meandor.est)
+se=sqrt(md1$meandor.se^2+md0$meandor.se^2)
+z=diff/se
+ci=diff+c(-1,1)*qnorm(0.975)*se
+pvalue=1-pchisq(z^2, 1)
+time.max1 <- md1$time.truncation
+time.max2 <- md1$time.truncation
+result=cbind(diff, ci[1], ci[2], pvalue, time.max1, time.max2)
+colnames(result)=c("difference in DOR", "CI.low", "CI.high", "p.value","time.max1","time.max2")
+print(round(result, 4)) }
+
+mdur(data_compress$PFS/30.4375,data_compress$censoring,data_compress$TTR/30.4375,data_compress$resp,data_compress$trt==1,data_compress$trt==0)
+
+```
+
+```{r}
+PBIR <- function(T2,deltaT2,T1,deltaT1,group1,group2){
+  PBIRfit1 <- PBIR1(T2[group1],deltaT2[group1],T1[group1],deltaT1[group1], time=NULL,alpha=0.95)
+  PBIRfit0 <- PBIR1(T2[group2],deltaT2[group2],T1[group2],deltaT1[group2], time=NULL,alpha=0.95)
+  tt1=c(0, PBIRfit1$time)
+  PBIR1=c(0, PBIRfit1$PBIR)
+  B1=length(tt1)
+  tt1=rep(tt1, rep(2, B1))[-1]
+  PBIR1=rep(PBIR1, rep(2, B1))[-(2*B1)]
+  tt0=c(0, PBIRfit0$time)
+  PBIR0=c(0, PBIRfit0$PBIR)
+  B0=length(tt0)
+  tt0=rep(tt0, rep(2, B0))[-1]
+  PBIR0=rep(PBIR0, rep(2, B0))[-(2*B0)]
+  plot(range(c(PBIRfit1$time, PBIRfit0$time)), range(c(PBIRfit1$PBIR, PBIRfit0$PBIR)),
+       xlab="time (months)",  ylab="PBIR",
+       main="C - Probability of Being in Response", type="n", xlim=c(0,20))
+  lines(tt0, PBIR0, col="red",lty="dashed")
+  lines(tt1, PBIR1, col="blue")
+  legend(x=12,y=0.3, legend=c("Control arm","Experimental arm"),fill=c("red","blue"))}
+PBIR(data_compress$PFS/30.4375,data_compress$censoring,data_compress$TTR/30.4375,data_compress$resp,data_compress$trt==1,data_compress$trt==0)
+```
+
+
+```{r}
+fit2=PBIR2(data_compress$PFS/30.4375, data_compress$censoring, data_compress$TTR/30.4375, data_compress$resp, data_compress$trt)
+
+tt=fit2$time
+diff=fit2$diff
+low=fit2$ci.low
+up=fit2$ci.up
+B=length(tt)+1
+tt=c(0, tt)
+diff=c(0, diff)
+low=c(0, low)
+up=c(0, up)
+tt=rep(tt, rep(2, B))[-1]
+diff=rep(diff, rep(2, B))[-(2*B)]
+low=rep(low, rep(2, B))[-(2*B)]
+up=rep(up, rep(2, B))[-(2*B)]
+plot(range(c(tt, 0)), range(c(low, up)), xlab="time (months)", ylab="Difference in PBIR", main='D - Difference in PBIR with 95% Confidence Interval', lwd=2, type="n", xlim=c(0,20))
+lines(tt, diff, lwd=2, col=3)
+lines(tt, low, col=2)
+lines(tt, up, col=2)
+lines(range(fit2$time), rep(0, 2), col=4, lty=4)
+
+```
+
+# DOR
+
+```{r}
+rep <- data_compress[data_compress$resp==1,]
+KM_dor_ctrl <- survfit(Surv(DOR/30.4375,censoring)~1,data=rep[rep$trt==0,])
+KM_dor_expe <- survfit(Surv(DOR/30.4375,censoring)~1,data=rep[rep$trt==1,])
+summary(KM_dor_expe)$table
+summary(KM_dor_ctrl)$table
+quantile(KM_dor_expe)
+quantile(KM_dor_ctrl)
+
+plot(KM_dor_ctrl, col="red",lty="dashed", conf.int=F, xlab="time (months)",ylab="Probability",main="A - Duration of Response", xlim=c(0,20))
+lines(KM_dor_expe,col="blue", conf.int=F)
+legend(x=12,y=1,legend=c("Control arm","Experimental arm"),fill=c("red","blue"))
+
+res.cox.dor <- coxph(Surv(DOR,censoring)~trt,data=rep)
+summary(res.cox.dor)
+```
+
+```{r}
+fit.obj.dor<- survfit(Surv(DOR/30.4375, censoring)~trt, data=data_compress)
+ggsurvplot(fit.obj.dor,
+           risk.table=T,
+           xlab= "Time (months)" , 
+           ylab= "Probability",
+           title = "A - Duration Of Response",
+           risk.table.height=0.3,
+           legend.title = "Group",
+           legend.labs = c("Control arm", "Experimental arm"),
+           palette = c("red", "blue"),
+           xlim=c(0,20),
+           break.x.by=5,
+           censor.shape="+")
+```
+
+# TIR
+
+```{r}
+data_compress$tir <- ifelse(data_compress$resp==1, data_compress$DOR, 1)
+data_compress$newcensor <- ifelse(data_compress$resp==1,data_compress$censoring,1)
+KM_tir_ctrl <- survfit(Surv(tir/30.4375,newcensor)~1,data_compress[data_compress$trt==0,])
+KM_tir_expe <- survfit(Surv(tir/30.4375,newcensor)~1,data_compress[data_compress$trt==1,])
+summary(KM_tir_expe)$table
+summary(KM_tir_ctrl)$table
+quantile(KM_tir_expe)
+quantile(KM_tir_ctrl)
+
+
+plot(KM_tir_ctrl, col="red", lty="dashed", conf.int=F, xlab="time (months)",ylab="Probability",main="B - Time in Response", xlim=c(0,20))
+lines(KM_tir_expe,col="blue", conf.int=F)
+legend(x=12,y=1,legend=c("Control arm","Experimental arm"),fill=c("red","blue"))
+
+res.cox.tir <- coxph(Surv(tir,newcensor)~trt,data=data_compress)
+summary(res.cox.tir)
+```
+
+
+```{r}
+fit.obj.tir<- survfit(Surv(tir/30.4375, newcensor)~trt, data=data_compress)
+ggsurvplot(fit.obj.tir,
+           risk.table=T,
+           xlab= "Time (months)" , 
+           ylab= "Probability",
+           title = "B - Time In Response",
+           risk.table.height=0.3,
+           legend.title = "Group",
+           legend.labs = c("Control arm", "Experimental arm"),
+           palette = c("red", "blue"),
+           xlim=c(0,20),
+           break.x.by=5,
+           censor.shape="+")
+```
+
+```{r}
+ORR <- xtabs(~resp+trt,data_compress)
+ORR
+proportions(ORR,"trt")
+```
+
+
