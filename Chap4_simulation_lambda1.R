@@ -1,11 +1,3 @@
-library(survival)
-library(PBIR)
-library(purrr)
-library(ggplot2)
-library(tidyr)
-library(latex2exp)
-library(dplyr)
-
 simdata_lambda1 <- function(n,n_accrual, n_follow, rr, lambda2_diff, lambda1_diff) {
   
   ##### CTRL ARM ####
