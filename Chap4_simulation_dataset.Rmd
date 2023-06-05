@@ -27,7 +27,8 @@ library(tidyr)
 
 
 ```{r datasets}
-aeendpt <- read_sas("Datasphère/zip/AllProvidedFiles_265/aeendpt.sas7bdat", NULL)
+load("data.Rdata")
+aeendpt <- data
 ```
 
 # Extract one dataset "data_compress"
